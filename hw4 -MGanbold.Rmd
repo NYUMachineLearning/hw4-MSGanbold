@@ -1,0 +1,182 @@
+---
+title: "hw_4_MGanbold"
+author: "Ganbold,MungunSarnai"
+date: "10/27/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r load relevant libraries, include=FALSE}
+library(tidyverse)
+library(caret)
+library(randomForest)
+library(mlbench)
+library(glmnet)
+```
+
+# Homework question 1.
+
+##Data
+
+Feature selection methods from the lab on another UCI derived breast cancer dataset with other variables related to parameters of nucleoli from fine niddle aspiration technique.
+Features were already calculated from digital images, of course :)
+
+```{r}
+#Loading and preparing data:
+brca <- read.csv("/Users/mungunsarnaiganbold/Desktop/ML_2019/hw4-MSGanbold/data.csv")
+str(brca)
+#all predictors are numeric
+summary(is.na(brca))
+#all NAs are in a last column "X"
+#removing ID and X columns:
+brca <- brca[, -c(1, 33)]
+head(brca)
+```
+
+
+##Feature selection based on stat.scores (Pearson correlation):
+
+```{r}
+library(corrplot)
+corMatrix = cor(brca[,2:31])
+corrplot(corMatrix, order = "hclust")
+#correlation filter=0.7
+highly_correlated <- colnames(brca[, -1])[findCorrelation(corMatrix, cutoff = 0.7, verbose = TRUE)]
+#these features are highly correlated and can be removed later to improve the accuracy of a model:
+highly_correlated 
+#20 features out of 30
+```
+
+
+##Machine learning algorithm based Recursive Feature Elimination (wrapper) method:
+```{r}
+#defining a helper function from pickSizeBest{caret} for backwards feature selection:  
+control = rfeControl(functions = caretFuncs, number = 2)
+#number =list of options incl functions for fitting n prediction
+
+# RFE with svmRadial:
+results = rfe(brca[,2:31], brca[,1], sizes = c(10,20,30), rfeControl = control, method = "svmRadial")
+#tries first 10, then 20 and lastly all 30 features
+results
+#results$variables
+
+plot(results, type=c("g","o"))
+```
+RFE with svmRadial model Accuracy with different set of features.
+
+
+##Imbedded penalizing LASSO feature selection method with Logistic Regression:
+```{r}
+set.seed(24)
+
+#convert data
+x = as.matrix(brca[,2:31]) #predictors
+y = as.double(as.matrix(ifelse(brca[,1]=='B', 0, 1))) 
+#y=double precision vector (floating point number) 
+#target is factored
+
+#Logistic regression with LASSO (alpha=1): 
+cv.lasso <- cv.glmnet(x, y, family='binomial', alpha=1, parallel=TRUE, standardize=TRUE, type.measure='auc')
+#cv.glmnet(x, y, weights, offset, lambda, type.measure, nfolds, foldid, alignment,
+#     grouped, keep, parallel, ...)
+
+#plot accuracy of LG with LASSO:
+plot(cv.lasso)
+
+cat('Min Lambda: ', cv.lasso$lambda.min, '\n 1Sd Lambda: ', cv.lasso$lambda.1se)
+#cat{base} - concatinate the above columns and print them under: Min Lambda and 1Sd Lambda
+
+#lambda.min for each feature:
+df_lambda_min <- round(as.matrix(coef(cv.lasso, s=cv.lasso$lambda.min)), 2)
+
+# See all contributing variables
+df_lambda_min[df_lambda_min[, 1] != 0, ]
+#subset all variables from coef column that are not equal to 0
+
+```
+Logistic Regression with Lasso selected 17 features (out of 30) as the ones contributing the most to the model accuracy
+ 
+ 
+##Random Forest with its importance weight as an imbedded feature selection method.
+
+```{r importance}
+data(brca)
+train_size <- floor(0.80 * nrow(brca))
+set.seed(7)
+train_Id <- sample(seq_len(nrow(brca)), size = train_size)
+#train indices by rows
+
+# all features are already numeric and data is clean
+
+train_brca <- brca[train_Id, ] #values
+test_brca <- brca[-train_Id, ]
+dim(train_brca)
+dim(test_brca)
+
+#RF:
+random_forest = randomForest(diagnosis ~., data=train_brca, importance = TRUE, oob.times = 15, confusion = TRUE)
+random_forest
+
+#importance function gives ranking of features in RF model:
+#importance(random_forest)
+importance(random_forest, type=1)
+#"type" of importance measure (1=mean decrease in ACCURACY, 2=mean decrease in node impurity).
+#"class" for classification problem, which class-specific measure to return.
+#"scale" for permutation based measures, should the measures be divided their “standard errors”?
+
+```
+ 
+RF important method scored features. The ones with obvious lowest important scores are:
+symmetry_mean, fractal_dimension_mean, texture_se, smoothness_se, compactness_se,concavity_se,concave.points_se,symmetry_se,fractal_dimension_se, compactness_worst, fractal_dimension_worst. and potentilaly more...
+
+
+#Homework Question 2. Attempt a feature selection method not covered in this tutorial (backward elimination, forward propogation, etc.)
+
+##We will try Simulated Annealing method.
+
+Simulated annealing is a global search algorithm that allows a suboptimal solution to be accepted in hope that a better solution will show up eventually.
+
+It works by making small random changes to an initial solution and sees if the performance improved. The change is accepted if it improves, else it can still be accepted if the difference of performances meet an acceptance criteria.
+
+In caret, it has been implemented in the safs(). It accepts a control parameter set using the safsControl(). It accepts an improve parameter which is the number of iterations it should wait without improvement until the values are reset to previous iteration.
+
+Let's go working with the same dataset.
+```{r}
+
+head(train_brca)
+
+# Define control function
+sa_ctrl <- safsControl(functions = rfSA,
+                        method = "repeatedcv",
+                        repeats = 3,
+                        improve = 5) # n iterations without improvement before a reset
+
+# Genetic Algorithm feature selection
+set.seed(100)
+sa_obj <- safs(x=train_brca[, c(2:31)], 
+               y=train_brca[, 1],
+               safsControl = sa_ctrl)
+
+sa_obj
+```
+From the report:
+In the final search using the entire training set:
+   * 13 features selected at iteration 9 including:
+     radius_mean, area_mean, concave.points_mean, symmetry_mean, fractal_dimension_mean ... 
+   * external performance at this iteration is
+
+   Accuracy       Kappa 
+     0.9531      0.8986 
+
+```{r}
+# Optimal variables
+print(sa_obj$optVariables)
+```
+
+Note to myself:
+different methods showed different variables as important, or at least the degree of importance changed. This need not be a conflict, because each method gives a different perspective of how the variable can be useful depending on how the algorithms learn Y ~ x. So its cool.
+
+
+Thank you!
